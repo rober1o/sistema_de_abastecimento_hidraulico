@@ -24,58 +24,59 @@
 #define I2C_SCL_DISP 15
 #define endereco 0x3C
 
+// Variáveis globais para armazenar min e max
+int limite_min = 0;
+int limite_max = 4095;
+
 const char HTML_BODY[] =
-    "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>LED</title><style>"
-    "body{font-family:sans-serif;text-align:center;padding:10px;margin:0;background:#f9f9f9}"
-    ".b{font-size:20px;padding:10px 30px;margin:10px;border:none;border-radius:8px;cursor:pointer;}"
-    ".on{background:#4CAF50;color:#fff}"
-    ".br{width:80%;background:#cce6f4;border-radius:6px;overflow:hidden;margin:0 auto 15px;height:40px}"
-    ".p{height:100%;transition:width .3s}.x{background:#0077be}"
-    ".l{font-weight:700;margin-bottom:5px;display:block}"
-    ".j{background:#00A1D7;padding:10px 15px;border-radius:10px;margin:15px auto;font-weight:700;display:block;max-width:60vw;width:90%}"
-    "input{padding:10px;margin:5px;border-radius:6px;border:1px solid #ccc;font-size:16px;width:80px}"
-    "#feedback{margin-top:10px;font-size:14px;color:#333;transition:opacity 0.5s;}"
+    "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Abastecimento</title><style>"
+    "body{font-family:sans-serif;background:#f0f0f0;text-align:center;padding:20px;}"
+    ".j{background:#125CC3;padding:20px;border-radius:10px;margin:0 auto;max-width:50vw;color:#fff;box-shadow:0 0 10px #999;}"
+    ".card{background:#fff;color:#333;padding:10px;margin:15px auto;border-radius:8px;box-shadow:0 2px 5px #aaa;width:90%;}"
+    ".card.small{width:40%;display:inline-block;margin:0px 28px;}"
+    ".bar{width:100%;background:#ddd;border-radius:8px;overflow:hidden;height:25px;margin:15px 0;box-shadow:inset 0 0 5px #999;}"
+    ".fill{height:100%;background:#0077be;width:0%;transition:0.5s;}"
+    "input{width:100px;padding:6px;margin:10px 5px;border:1px solid #ccc;border-radius:5px;font-size:14px;}"
+    "button{padding:8px 16px;background:#4CAF50;color:#fff;border:none;border-radius:5px;cursor:pointer;margin:10px;width:180px;}"
+    "#feedback{font-size:16px;font-weight:bold;padding:10px 20px;border-radius:8px; wid"
+    "margin-top:15px;display:inline-block;transition:opacity 0.5s ease;opacity:0;}"
+    "#feedback.ok{background:rgba(76,175,80,0.8);color:#fff;}"    /* verde sucesso */
+    "#feedback.error{background:rgba(244,67,54,0.8);color:#fff;}" /* vermelho erro */
     "</style><script>"
-    "function u(){fetch('/estado').then(r=>r.json()).then(d=>{"
-    "document.getElementById('estado').innerText=d.bomba?'Ligado':'Desligado';"
-    "document.getElementById('x_valor').innerText=d.x;"
-    "document.getElementById('bx').style.width=Math.round(d.x/4095*100)+'%';"
-    "document.getElementById('min_valor').innerText=d.min;"
-    "document.getElementById('max_valor').innerText=d.max;"
-    "})}"
-    "function enviarLimites(){"
-    "let min=parseInt(document.getElementById('min').value);"
-    "let max=parseInt(document.getElementById('max').value);"
-    "const fb=document.getElementById('feedback');"
-    "if(isNaN(min)||isNaN(max)||min<0||max>100||min>max){"
-    "fb.innerText='Valores inválidos (0-100, min<=max)';fb.style.opacity=1;"
-    "setTimeout(()=>fb.style.opacity=0,3000);return;}"
-    "fetch(`/limites/min/${min}/max/${max}`)"
-    ".then(r=>r.text()).then(data=>{"
-    "fb.innerText=data;fb.style.opacity=1;"
-    "setTimeout(()=>fb.style.opacity=0,3000);"
-    "document.getElementById('min').value='';"
-    "document.getElementById('max').value='';"
-    "}).catch(err=>{"
-    "fb.innerText='Erro: '+err;fb.style.opacity=1;"
-    "setTimeout(()=>fb.style.opacity=0,3000);"
-    "});"
+    "function att(){fetch('/estado').then(r=>r.json()).then(d=>{"
+    "document.getElementById('bomba').innerText=d.bomba?'Ligada':'Desligada';"
+    "document.getElementById('min').innerText=d.min;"
+    "document.getElementById('max').innerText=d.max;"
+    "document.getElementById('nivel').innerText=d.x;"
+    "document.getElementById('fill').style.width=(d.x/4095*100)+'%';"
+    "});}"
+    "function enviar(){let minv=parseInt(min_in.value),maxv=parseInt(max_in.value);"
+    "if(isNaN(minv)||isNaN(maxv)||minv<0||maxv>100||minv>maxv){fb('Valores inválidos','error');return;}"
+    "fetch('/limites/min/'+minv+'/max/'+maxv).then(r=>r.text()).then(t=>fb(t,'ok'));"
+    "min_in.value='';max_in.value='';" // limpa os inputs após enviar
     "}"
-    "document.addEventListener('keydown',e=>{if(e.key==='Enter')enviarLimites();});"
-    "setInterval(u,1000);"
+    "function fb(t,cls){let e=document.getElementById('feedback');"
+    "e.className='';e.classList.add(cls);e.innerText=t;e.style.opacity=1;"
+    "setTimeout(()=>{e.style.opacity=0;},3000);}"
+    "setInterval(att,1000);"
+    "document.addEventListener('DOMContentLoaded',()=>{"
+    "document.getElementById('min_in').addEventListener('keydown',handleKey);"
+    "document.getElementById('max_in').addEventListener('keydown',handleKey);"
+    "function handleKey(e){if(e.key==='Enter')enviar();}"
+    "});"
     "</script></head><body>"
     "<div class='j'>"
-    "<h1>Sistema de abastecimento</h1>"
-    "<p>Bomba: <span id='estado'>--</span></p>"
-    "<p class='l'>Mínimo: <span id='min_valor'>--</span></p>"
-    "<p class='l'>Máximo: <span id='max_valor'>--</span></p>"
-    "<p class='l'>Nível da caixa d'água: <span id='x_valor'>--</span></p>"
-    "<div class='br'><div id='bx' class='p x'></div></div>"
-    "<input type='number' id='min' placeholder='min' min='0' max='100' step='1'>"
-    "<input type='number' id='max' placeholder='max' min='0' max='100' step='1'>"
-    "<br><button class='b on' onclick='enviarLimites()'>Enviar</button>"
-    "<p id='feedback' style='opacity:0;'></p>"
-    "</div>";
+    "<h1>Sistema de Abastecimento</h1>"
+    "<div class='card'>Bomba: <span id='bomba'>--</span></div>"
+    "<div class='card small'>Min: <span id='min'>--</span></div>"
+    "<div class='card small'>Max: <span id='max'>--</span></div>"
+    "<div class='card'>Nível: <span id='nivel'>--</span>"
+    "<div class='bar'><div id='fill' class='fill'></div></div></div>"
+    "<input id='min_in' type='number' min='0' max='100' placeholder='Min'>"
+    "<input id='max_in' type='number' min='0' max='100' placeholder='Max'><br>"
+    "<button onclick='enviar()'>Enviar</button><br>"
+    "<div id='feedback'></div>"
+    "</div></body></html>";
 
 struct http_state
 {
@@ -95,10 +96,6 @@ static err_t http_sent(void *arg, struct tcp_pcb *tpcb, u16_t len)
     }
     return ERR_OK;
 }
-
-// Variáveis globais para armazenar min e max
-int limite_min = 0;
-int limite_max = 4095;
 
 static err_t http_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err)
 {
