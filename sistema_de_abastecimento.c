@@ -16,8 +16,8 @@
 #define JOYSTICK_X 26
 #define JOYSTICK_Y 27
 
-#define WIFI_SSID "BORGES"
-#define WIFI_PASS "gomugomu"
+#define WIFI_SSID "NomeDaRede"
+#define WIFI_PASS "Senha_Do_Wifi"
 
 #define I2C_PORT_DISP i2c1
 #define I2C_SDA_DISP 14
@@ -115,6 +115,18 @@ static err_t http_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t er
         int min = 0, max = 0;
         if (sscanf(req, "GET /limites/min/%d/max/%d", &min, &max) == 2)
         {
+        //min so pode ficar entre 20 e 80
+        if(min<20){
+            min=20;
+        }else if(min>80){
+            min=80;
+        }
+        //calcula diferença mínima de 20 entre mix e max
+        if((max-min)<20){
+            if(min<=80 && min>=20){
+                max=min+20;
+            }   
+        }
             limite_min = min;
             limite_max = max;
 
