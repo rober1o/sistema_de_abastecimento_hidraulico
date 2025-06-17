@@ -15,6 +15,21 @@
 #define BOTAO_JOY 22
 #define JOYSTICK_X 26
 #define JOYSTICK_Y 27
+#define Bomba 13
+void LigDes_bomba(){
+    //---------Inicio Func Liga/desliga Bomba------------------------
+        uint16_t nivel;
+        adc_select_input(0);
+        uint16_t a = adc_read();
+        nivel=a/4095.0*100;
+        if(nivel<=20){
+            gpio_put(Bomba,1);//simula acionamento da bomba
+        }
+        if(nivel>=95){
+            gpio_put(Bomba,0);//simula desligamento da bomba
+        }
+        //---------Fim Func Liga/desliga Bomba------------------------
+}
 
 #define WIFI_SSID "NomeDaRede"
 #define WIFI_PASS "Senha_Do_Wifi"
@@ -115,6 +130,7 @@ static err_t http_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t er
         int min = 0, max = 0;
         if (sscanf(req, "GET /limites/min/%d/max/%d", &min, &max) == 2)
         {
+        //------Inicio Calculo diferença minima de 20% entre min e max----------
         //min so pode ficar entre 20 e 80
         if(min<20){
             min=20;
@@ -127,6 +143,7 @@ static err_t http_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t er
                 max=min+20;
             }   
         }
+        //------Fim Calculo diferença minima de 20% entre min e max----------
             limite_min = min;
             limite_max = max;
 
@@ -159,8 +176,7 @@ static err_t http_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t er
     else if (strstr(req, "GET /estado"))
     {
         adc_select_input(0);
-        uint16_t x = adc_read();
-
+        uint16_t x = adc_read();        
         char json_payload[96]; // Aumentado o tamanho do buffer para caber min e max
         int json_len = snprintf(json_payload, sizeof(json_payload),
                                 "{\"bomba\":%d,\"x\":%d,\"min\":%d,\"max\":%d}\r\n",
@@ -238,6 +254,9 @@ int main()
 
     stdio_init_all();
     sleep_ms(2000);
+
+    gpio_init(Bomba);
+    gpio_set_dir(Bomba, GPIO_OUT);
 
     gpio_init(LED_PIN);
     gpio_set_dir(LED_PIN, GPIO_OUT);
@@ -328,6 +347,7 @@ int main()
         ssd1306_rect(&ssd, 52, 114, 8, 8, cor, !cor);                // Desenha um retângulo
         ssd1306_send_data(&ssd);                                     // Atualiza o display
 
+        LigDes_bomba();
         sleep_ms(300);
     }
 
