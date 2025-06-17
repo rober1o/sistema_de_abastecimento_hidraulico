@@ -15,17 +15,28 @@
 #define BOTAO_JOY 22
 #define JOYSTICK_X 26
 #define JOYSTICK_Y 27
-#define Bomba 13
+#define Bomba 13//simula bomba
+uint16_t Min_G =20;//guarda nivel min globalmente
+uint16_t Max_G =80;//guarda nivel max globalmente
 void LigDes_bomba(){
-    //---------Inicio Func Liga/desliga Bomba------------------------
-        uint16_t nivel;
+    //------Início Tratamento para simular boia com JOY--------------
         adc_select_input(0);
-        uint16_t a = adc_read();
-        nivel=a/4095.0*100;
-        if(nivel<=20){
+        uint16_t x = adc_read();
+        if(x<400){
+            x=400;
+        }else if(x>2050){
+            x=2050;
+        }
+        uint16_t nivel=((x-400)/1650.00)*100; //normalziando
+        printf("nivel %d\n", nivel);
+        //------Fim Tratamento para simular boia com JOY-----------------
+
+        //---------Inicio Func Liga/desliga Bomba------------------------
+         
+        if(nivel<=Min_G){
             gpio_put(Bomba,1);//simula acionamento da bomba
         }
-        if(nivel>=95){
+        if(nivel>=Max_G){
             gpio_put(Bomba,0);//simula desligamento da bomba
         }
         //---------Fim Func Liga/desliga Bomba------------------------
@@ -143,6 +154,8 @@ static err_t http_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t er
                 max=min+20;
             }   
         }
+            Max_G= max;//guarda globalmente
+            Min_G= min;//guarda globalmente
         //------Fim Calculo diferença minima de 20% entre min e max----------
             limite_min = min;
             limite_max = max;
@@ -176,7 +189,7 @@ static err_t http_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t er
     else if (strstr(req, "GET /estado"))
     {
         adc_select_input(0);
-        uint16_t x = adc_read();        
+        uint16_t x = adc_read();         
         char json_payload[96]; // Aumentado o tamanho do buffer para caber min e max
         int json_len = snprintf(json_payload, sizeof(json_payload),
                                 "{\"bomba\":%d,\"x\":%d,\"min\":%d,\"max\":%d}\r\n",
@@ -346,9 +359,8 @@ int main()
         ssd1306_rect(&ssd, 52, 102, 8, 8, cor, !gpio_get(BOTAO_A));  // Desenha um retângulo
         ssd1306_rect(&ssd, 52, 114, 8, 8, cor, !cor);                // Desenha um retângulo
         ssd1306_send_data(&ssd);                                     // Atualiza o display
-
-        LigDes_bomba();
         sleep_ms(300);
+        LigDes_bomba();
     }
 
     cyw43_arch_deinit();
