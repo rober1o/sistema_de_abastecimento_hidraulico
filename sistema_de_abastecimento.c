@@ -4,32 +4,162 @@
 #include "hardware/i2c.h"
 #include "hardware/adc.h"
 #include "hardware/gpio.h"
+#include "hardware/pwm.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include "ssd1306.h"
 #include "font.h"
-
 #define LED_PIN 12
 #define BOTAO_A 5
-#define BOTAO_JOY 22
-#define JOYSTICK_X 26
-#define JOYSTICK_Y 27
+#define BOTAO_B 6
+#define BOTAO_C 22
+#define PIN_BOMBA 28
+#define Bomba 8 // simula bomba
+#define LED_BOMBA_LIGADA 16
+#define LED_BOMBA_DESLIGADA 17
+#define BUZZER_PIN 10
 
-#define WIFI_SSID "BORGES"
-#define WIFI_PASS "gomugomu"
+// Variaveis PWM
+#define PWM_WRAP 255
+
+// Tempo mínimo entre acionamentos (200 ms)
+const uint64_t DEBOUNCE_TIME_US = 200000;
+
+uint64_t ultimo_som_baixo_us = 0;
+uint64_t ultimo_som_alto_us = 0;
+bool som_baixo_tocado = false;
+bool som_alto_tocado = false;
+const uint64_t intervalo_som_us = 5000000; // 5 segundos em microssegundos
+
+// Últimos tempos de acionamento de cada botão
+uint64_t ultimo_tempo_a = 0;
+uint64_t ultimo_tempo_b = 0;
+uint64_t ultimo_tempo_c = 0;
+int calibracao_minima = 400;
+int calibracao_maxima = 2050;
+// Variáveis globais para armazenar min e max
+int limite_min = 20;
+int limite_max = 80;
+
+void tocar_nivel_alto();
+void tocar_nivel_baixo();
+void tocar_start();
+
+void LigDes_bomba()
+{
+
+    adc_select_input(2);
+    uint16_t x = adc_read();
+    uint16_t nivel = (uint16_t)((1.0f - ((float)(x - calibracao_minima) / (calibracao_maxima - calibracao_minima))) * 100.0f);
+    printf("nivel %d\n", nivel);
+
+    // Controle da bomba e sons com lógica de estado
+    if (nivel <= limite_min)
+    {
+        gpio_put(Bomba, 1); // Liga bomba
+
+        // Toca apenas se ainda não tiver tocado para este evento
+        if (!som_baixo_tocado)
+        {
+            tocar_nivel_baixo();
+            som_baixo_tocado = true;
+            som_alto_tocado = false; // Reseta o estado do som alto
+        }
+    }
+    else if (nivel >= limite_max)
+    {
+        gpio_put(Bomba, 0); // Desliga bomba
+
+        // Toca apenas se ainda não tiver tocado para este evento
+        if (!som_alto_tocado)
+        {
+            tocar_nivel_alto();
+            som_alto_tocado = true;
+            som_baixo_tocado = false; // Reseta o estado do som baixo
+        }
+    }
+    else
+    {
+        // Dentro da faixa normal - reseta os estados
+        som_baixo_tocado = false;
+        som_alto_tocado = false;
+    }
+
+    if (gpio_get(Bomba))
+    {
+        gpio_put(LED_BOMBA_DESLIGADA, false);
+        gpio_put(LED_BOMBA_LIGADA, true);
+    }
+    else
+    {
+        gpio_put(LED_BOMBA_LIGADA, false);
+        gpio_put(LED_BOMBA_DESLIGADA, true);
+    }
+}
+
+// Callback para parar o tom
+int64_t stop_tone_callback(alarm_id_t id, void *user_data)
+{
+    uint gpio = *(uint *)user_data;
+    uint slice_num = pwm_gpio_to_slice_num(gpio);
+    pwm_set_enabled(slice_num, false);
+    gpio_set_function(gpio, GPIO_FUNC_SIO);
+    gpio_set_dir(gpio, GPIO_OUT);
+    gpio_put(gpio, 0);
+    free(user_data);
+    return 0;
+}
+// Feedback sonoro
+void play_tone_non_blocking(uint gpio, int frequency, int duration_ms)
+{
+    uint slice_num = pwm_gpio_to_slice_num(gpio);
+    uint channel = pwm_gpio_to_channel(gpio);
+    gpio_set_function(gpio, GPIO_FUNC_PWM);
+    float divider = 1.0f;
+    uint32_t wrap = (uint32_t)((125000000.0f / (divider * frequency)) - 1);
+    pwm_set_clkdiv(slice_num, divider);
+    pwm_set_wrap(slice_num, wrap);
+    pwm_set_chan_level(slice_num, channel, (wrap + 1) / 2);
+    pwm_set_enabled(slice_num, true);
+    uint *gpio_ptr = malloc(sizeof(uint));
+    *gpio_ptr = gpio;
+    add_alarm_in_ms(duration_ms, stop_tone_callback, gpio_ptr, false);
+}
+
+// Reproduzir som para inicialização do sistema
+void tocar_start()
+{
+
+    play_tone_non_blocking(BUZZER_PIN, 523, 200); // Dó
+
+    play_tone_non_blocking(BUZZER_PIN, 659, 200); // Mi
+
+    play_tone_non_blocking(BUZZER_PIN, 784, 400); // Sol
+}
+
+// Reproduzir som para nível alto (5 segundos)
+void tocar_nivel_alto()
+{
+    play_tone_non_blocking(BUZZER_PIN, 440, 1000); // Lá por 5 segundos
+}
+
+// Reproduzir som para nível baixo (5 segundos)
+void tocar_nivel_baixo()
+{
+    play_tone_non_blocking(BUZZER_PIN, 440, 1000); // Dó por 5 segundos
+}
+
+#define WIFI_SSID "GIPAR"
+#define WIFI_PASS "usergipar"
 
 #define I2C_PORT_DISP i2c1
 #define I2C_SDA_DISP 14
 #define I2C_SCL_DISP 15
 #define endereco 0x3C
 
-// Variáveis globais para armazenar min e max
-int limite_min = 0;
-int limite_max = 4095;
-
 const char HTML_BODY[] =
-    "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Abastecimento</title><style>"
+    "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Sistema de bastecimento</title><style>"
     "body{font-family:sans-serif;background:#f0f0f0;text-align:center;padding:20px;}"
     ".j{background:#125CC3;padding:20px;border-radius:10px;margin:0 auto;max-width:50vw;color:#fff;}"
     ".card{background:#fff;color:#333;padding:10px;margin:10px auto;border-radius:8px;width:90%;}"
@@ -47,7 +177,7 @@ const char HTML_BODY[] =
     "document.getElementById('min').innerText=d.min;"
     "document.getElementById('max').innerText=d.max;"
     "document.getElementById('nivel').innerText=d.x;"
-    "document.getElementById('fill').style.width=(d.x/4095*100)+'%';});}"
+    "document.getElementById('fill').style.width=d.x+'%';});}"
     "function enviar(){let minv=parseInt(min_in.value),maxv=parseInt(max_in.value);"
     "if(isNaN(minv)||isNaN(maxv)||minv<0||maxv>100||minv>maxv){fb('Os valores devem estar entre 0 e 100, sendo que o valor mínimo não pode ser maior que o valor máximo','error');return;}"
     "fetch('/limites/min/'+minv+'/max/'+maxv).then(r=>r.text()).then(t=>fb(t,'ok'));"
@@ -60,7 +190,7 @@ const char HTML_BODY[] =
     "function k(e){if(e.key==='Enter')enviar();}});"
     "</script></head><body>"
     "<div class='j'>"
-    "<h1>Abastecimento</h1>"
+    "<h1>Sistema de abastecimento</h1>"
     "<div class='card'>Bomba:<span id='bomba'>--</span></div>"
     "<div class='card small'>Nível mínimo: <span id='min'>--</span></div>"
     "<div class='card small'>Nível máximo: <span id='max'>--</span></div>"
@@ -115,6 +245,24 @@ static err_t http_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t er
         int min = 0, max = 0;
         if (sscanf(req, "GET /limites/min/%d/max/%d", &min, &max) == 2)
         {
+            //------Inicio Calculo diferença minima de 20% entre min e max----------
+            // min so pode ficar entre 20 e 80
+            if (min < 20)
+            {
+                min = 20;
+            }
+            else if (min > 80)
+            {
+                min = 80;
+            }
+            // calcula diferença mínima de 20 entre mix e max
+            if ((max - min) < 20)
+            {
+                if (min <= 80 && min >= 20)
+                {
+                    max = min + 20;
+                }
+            }
             limite_min = min;
             limite_max = max;
 
@@ -146,13 +294,15 @@ static err_t http_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t er
     // Rota: /estado (usada pelo JS para atualizar a barra)
     else if (strstr(req, "GET /estado"))
     {
-        adc_select_input(0);
-        uint16_t x = adc_read();
+        adc_select_input(2);
+        uint16_t x_raw = adc_read();
+        uint8_t x = (x_raw <= calibracao_minima) ? 100 : (x_raw >= calibracao_maxima) ? 0
+                                                                                      : (uint8_t)(((calibracao_maxima - x_raw) * 100) / (calibracao_maxima - calibracao_minima));
 
         char json_payload[96]; // Aumentado o tamanho do buffer para caber min e max
         int json_len = snprintf(json_payload, sizeof(json_payload),
                                 "{\"bomba\":%d,\"x\":%d,\"min\":%d,\"max\":%d}\r\n",
-                                gpio_get(LED_PIN), x, limite_min, limite_max); // <- ordem corrigida
+                                gpio_get(Bomba), x, limite_min, limite_max); // <- ordem corrigida
 
         hs->len = snprintf(hs->response, sizeof(hs->response),
                            "HTTP/1.1 200 OK\r\n"
@@ -214,33 +364,84 @@ static void start_http_server(void)
 #define BOTAO_B 6
 void gpio_irq_handler(uint gpio, uint32_t events)
 {
-    reset_usb_boot(0, 0);
+    if (events & GPIO_IRQ_EDGE_FALL)
+    {
+        uint64_t agora = time_us_64();
+
+        if (gpio == BOTAO_A)
+        {
+            if (agora - ultimo_tempo_a > DEBOUNCE_TIME_US)
+            {
+                ultimo_tempo_a = agora;
+                adc_select_input(2);
+                calibracao_minima = adc_read();
+            }
+        }
+        else if (gpio == BOTAO_B)
+        {
+            if (agora - ultimo_tempo_b > DEBOUNCE_TIME_US)
+            {
+                ultimo_tempo_b = agora;
+                adc_select_input(2);
+                calibracao_maxima = adc_read();
+            }
+        }
+        else if (gpio == BOTAO_C)
+        {
+            if (agora - ultimo_tempo_c > DEBOUNCE_TIME_US)
+            {
+                ultimo_tempo_c = agora;
+                reset_usb_boot(0, 0); // Reinicia no modo BOOT
+            }
+        }
+    }
 }
 
 int main()
 {
-    gpio_init(BOTAO_B);
-    gpio_set_dir(BOTAO_B, GPIO_IN);
-    gpio_pull_up(BOTAO_B);
-    gpio_set_irq_enabled_with_callback(BOTAO_B, GPIO_IRQ_EDGE_FALL, true, &gpio_irq_handler);
 
-    stdio_init_all();
-    sleep_ms(2000);
-
-    gpio_init(LED_PIN);
-    gpio_set_dir(LED_PIN, GPIO_OUT);
-    gpio_put(LED_PIN, true);
+    // Inicialização dos botões como entrada com pull-up
     gpio_init(BOTAO_A);
     gpio_set_dir(BOTAO_A, GPIO_IN);
     gpio_pull_up(BOTAO_A);
 
-    gpio_init(BOTAO_JOY);
-    gpio_set_dir(BOTAO_JOY, GPIO_IN);
-    gpio_pull_up(BOTAO_JOY);
+    gpio_init(BOTAO_B);
+    gpio_set_dir(BOTAO_B, GPIO_IN);
+    gpio_pull_up(BOTAO_B);
+
+    gpio_init(BOTAO_C);
+    gpio_set_dir(BOTAO_C, GPIO_IN);
+    gpio_pull_up(BOTAO_C);
+
+    // Habilita interrupções na borda de descida (falling edge)
+    gpio_set_irq_enabled(BOTAO_A, GPIO_IRQ_EDGE_FALL, true);
+    gpio_set_irq_enabled(BOTAO_B, GPIO_IRQ_EDGE_FALL, true);
+    gpio_set_irq_enabled(BOTAO_C, GPIO_IRQ_EDGE_FALL, true);
+
+    // Registra o callback uma única vez
+    gpio_set_irq_callback(&gpio_irq_handler);
+    irq_set_enabled(IO_IRQ_BANK0, true);
+
+    stdio_init_all();
+    sleep_ms(2000);
+
+    gpio_init(Bomba);
+    gpio_set_dir(Bomba, GPIO_OUT);
+
+    gpio_init(LED_BOMBA_LIGADA);
+    gpio_set_dir(LED_BOMBA_LIGADA, GPIO_OUT);
+    gpio_put(LED_BOMBA_LIGADA, false);
+
+    gpio_init(LED_BOMBA_DESLIGADA);
+    gpio_set_dir(LED_BOMBA_DESLIGADA, GPIO_OUT);
+    gpio_put(LED_BOMBA_DESLIGADA, false);
+
+    gpio_init(BOTAO_A);
+    gpio_set_dir(BOTAO_A, GPIO_IN);
+    gpio_pull_up(BOTAO_A);
 
     adc_init();
-    adc_gpio_init(JOYSTICK_X);
-    adc_gpio_init(JOYSTICK_Y);
+    adc_gpio_init(PIN_BOMBA);
 
     i2c_init(I2C_PORT_DISP, 400 * 1000);
     gpio_set_function(I2C_SDA_DISP, GPIO_FUNC_I2C);
@@ -286,37 +487,61 @@ int main()
     char str_x[5]; // Buffer para armazenar a string
     char str_y[5]; // Buffer para armazenar a string
     bool cor = true;
+
+    tocar_start();
+
     while (true)
     {
         cyw43_arch_poll();
 
-        // Leitura dos valores analógicos
-        adc_select_input(0);
-        uint16_t adc_value_x = adc_read();
-        adc_select_input(1);
-        uint16_t adc_value_y = adc_read();
+        adc_select_input(2);
+        uint16_t posicao_boia = adc_read();
 
-        sprintf(str_x, "%d", adc_value_x);            // Converte o inteiro em string
-        sprintf(str_y, "%d", adc_value_y);            // Converte o inteiro em string
-        ssd1306_fill(&ssd, !cor);                     // Limpa o display
-        ssd1306_rect(&ssd, 3, 3, 122, 60, cor, !cor); // Desenha um retângulo
-        ssd1306_line(&ssd, 3, 25, 123, 25, cor);      // Desenha uma linha
-        ssd1306_line(&ssd, 3, 37, 123, 37, cor);      // Desenha uma linha
+        // Cálculo do nível em porcentagem (com proteção contra divisão por zero)
+        uint16_t nivel_de_agua = 0;
+        if (calibracao_maxima != calibracao_minima)
+        {
+            nivel_de_agua = (uint16_t)((1.0f - ((float)(posicao_boia - calibracao_minima) /
+                                                (calibracao_maxima - calibracao_minima))) *
+                                       100.0f);
+        }
 
-        ssd1306_draw_string(&ssd, "CEPEDI   TIC37", 8, 6); // Desenha uma string
-        ssd1306_draw_string(&ssd, "EMBARCATECH", 20, 16);  // Desenha uma string
-        ssd1306_draw_string(&ssd, ip_str, 10, 28);
-        ssd1306_draw_string(&ssd, "X    Y    PB", 20, 41);           // Desenha uma string
-        ssd1306_line(&ssd, 44, 37, 44, 60, cor);                     // Desenha uma linha vertical
-        ssd1306_draw_string(&ssd, str_x, 8, 52);                     // Desenha uma string
-        ssd1306_line(&ssd, 84, 37, 84, 60, cor);                     // Desenha uma linha vertical
-        ssd1306_draw_string(&ssd, str_y, 49, 52);                    // Desenha uma string
-        ssd1306_rect(&ssd, 52, 90, 8, 8, cor, !gpio_get(BOTAO_JOY)); // Desenha um retângulo
-        ssd1306_rect(&ssd, 52, 102, 8, 8, cor, !gpio_get(BOTAO_A));  // Desenha um retângulo
-        ssd1306_rect(&ssd, 52, 114, 8, 8, cor, !cor);                // Desenha um retângulo
-        ssd1306_send_data(&ssd);                                     // Atualiza o display
+        // Estado da bomba
+        const char *estado_bomba = gpio_get(Bomba) ? "ON" : "OFF";
 
-        sleep_ms(300);
+        // Buffers de texto
+        char str_ip[30];
+        char str_nivel[20];
+        char str_limites[30];
+        char str_estado[20];
+
+        snprintf(str_ip, sizeof(str_ip), "%s", ip_str);
+        snprintf(str_nivel, sizeof(str_nivel), "Nivel:%u%%", nivel_de_agua);
+        snprintf(str_limites, sizeof(str_limites), "Min:%u Max:%u", limite_min, limite_max);
+        snprintf(str_estado, sizeof(str_estado), "Bomba:%s", estado_bomba);
+
+        // Desenha display
+        ssd1306_fill(&ssd, !cor);                     // Limpa
+        ssd1306_rect(&ssd, 3, 3, 122, 60, cor, !cor); // Borda externa
+
+        // Texto
+        ssd1306_draw_string(&ssd, str_ip, 6, 6); // Linha 1
+        ssd1306_line(&ssd, 4, 16, 124, 16, cor); // Separador
+
+        ssd1306_draw_string(&ssd, str_nivel, 6, 18); // Linha 2
+        ssd1306_line(&ssd, 4, 28, 124, 28, cor);     // Separador
+
+        ssd1306_draw_string(&ssd, str_limites, 6, 30); // Linha 3
+        ssd1306_line(&ssd, 4, 40, 124, 40, cor);       // Separador
+
+        ssd1306_draw_string(&ssd, str_estado, 6, 42); // Linha 4
+        ssd1306_line(&ssd, 4, 52, 124, 52, cor);      // Separador final (opcional)
+
+        ssd1306_send_data(&ssd); // Atualiza display
+
+        printf("Calibracao minima %d calibracao máxima %d \n", calibracao_minima, calibracao_maxima);
+        LigDes_bomba();
+        sleep_ms(1000);
     }
 
     cyw43_arch_deinit();
