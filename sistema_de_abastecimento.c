@@ -11,25 +11,41 @@
 #include "font.h"
 #define LED_PIN 12
 #define BOTAO_A 5
+#define BOTAO_B 6
+#define BOTAO_C 22
 #define PIN_BOMBA 28
 #define Bomba 8 // simula bomba
+#define LED_BOMBA_LIGADA 16
+#define LED_BOMBA_DESLIGADA 17
+
+// Tempo mínimo entre acionamentos (200 ms)
+const uint64_t DEBOUNCE_TIME_US = 200000;
+
+// Últimos tempos de acionamento de cada botão
+uint64_t ultimo_tempo_a = 0;
+uint64_t ultimo_tempo_b = 0;
+uint64_t ultimo_tempo_c = 0;
+int calibracao_minima = 400;
+int calibracao_maxima = 2050;
 // Variáveis globais para armazenar min e max
 int limite_min = 20;
 int limite_max = 80;
 void LigDes_bomba()
 {
+    if (gpio_get(Bomba))
+    {
+        gpio_put(LED_BOMBA_DESLIGADA, false);
+        gpio_put(LED_BOMBA_LIGADA, true);
+    }
+    else
+    {
+        gpio_put(LED_BOMBA_LIGADA, false);
+        gpio_put(LED_BOMBA_DESLIGADA, true);
+    }
     //------Início Tratamento para simular boia com JOY--------------
     adc_select_input(2);
     uint16_t x = adc_read();
-    if (x < 400)
-    {
-        x = 400;
-    }
-    else if (x > 2050)
-    {
-        x = 2050;
-    }
-    uint16_t nivel = ((x - 400) / 1650.00) * -100+100; // normalziando
+    uint16_t nivel = (uint16_t)((1.0f - ((float)(x - calibracao_minima) / (calibracao_maxima - calibracao_minima))) * 100.0f);
     printf("nivel %d\n", nivel);
     //------Fim Tratamento para simular boia com JOY-----------------
 
@@ -192,13 +208,13 @@ static err_t http_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t er
     {
         adc_select_input(2);
         uint16_t x_raw = adc_read();
-        uint8_t x = (x_raw <= 400) ? 100 : (x_raw >= 2050) ? 0
-                                                           : (uint8_t)(((2050 - x_raw) * 100) / (2050 - 400));
+        uint8_t x = (x_raw <= calibracao_minima) ? 100 : (x_raw >= calibracao_maxima) ? 0
+                                                                                      : (uint8_t)(((calibracao_maxima - x_raw) * 100) / (calibracao_maxima - calibracao_minima));
 
         char json_payload[96]; // Aumentado o tamanho do buffer para caber min e max
         int json_len = snprintf(json_payload, sizeof(json_payload),
                                 "{\"bomba\":%d,\"x\":%d,\"min\":%d,\"max\":%d}\r\n",
-                                gpio_get(LED_PIN), x, limite_min, limite_max); // <- ordem corrigida
+                                gpio_get(Bomba), x, limite_min, limite_max); // <- ordem corrigida
 
         hs->len = snprintf(hs->response, sizeof(hs->response),
                            "HTTP/1.1 200 OK\r\n"
@@ -260,15 +276,63 @@ static void start_http_server(void)
 #define BOTAO_B 6
 void gpio_irq_handler(uint gpio, uint32_t events)
 {
-    reset_usb_boot(0, 0);
+    if (events & GPIO_IRQ_EDGE_FALL)
+    {
+        uint64_t agora = time_us_64();
+
+        if (gpio == BOTAO_A)
+        {
+            if (agora - ultimo_tempo_a > DEBOUNCE_TIME_US)
+            {
+                ultimo_tempo_a = agora;
+                adc_select_input(2);
+                calibracao_minima = adc_read();
+            }
+        }
+        else if (gpio == BOTAO_B)
+        {
+            if (agora - ultimo_tempo_b > DEBOUNCE_TIME_US)
+            {
+                ultimo_tempo_b = agora;
+                adc_select_input(2);
+                calibracao_maxima = adc_read();
+            }
+        }
+        else if (gpio == BOTAO_C)
+        {
+            if (agora - ultimo_tempo_c > DEBOUNCE_TIME_US)
+            {
+                ultimo_tempo_c = agora;
+                reset_usb_boot(0, 0); // Reinicia no modo BOOT
+            }
+        }
+    }
 }
 
 int main()
 {
+
+    // Inicialização dos botões como entrada com pull-up
+    gpio_init(BOTAO_A);
+    gpio_set_dir(BOTAO_A, GPIO_IN);
+    gpio_pull_up(BOTAO_A);
+
     gpio_init(BOTAO_B);
     gpio_set_dir(BOTAO_B, GPIO_IN);
     gpio_pull_up(BOTAO_B);
-    gpio_set_irq_enabled_with_callback(BOTAO_B, GPIO_IRQ_EDGE_FALL, true, &gpio_irq_handler);
+
+    gpio_init(BOTAO_C);
+    gpio_set_dir(BOTAO_C, GPIO_IN);
+    gpio_pull_up(BOTAO_C);
+
+    // Habilita interrupções na borda de descida (falling edge)
+    gpio_set_irq_enabled(BOTAO_A, GPIO_IRQ_EDGE_FALL, true);
+    gpio_set_irq_enabled(BOTAO_B, GPIO_IRQ_EDGE_FALL, true);
+    gpio_set_irq_enabled(BOTAO_C, GPIO_IRQ_EDGE_FALL, true);
+
+    // Registra o callback uma única vez
+    gpio_set_irq_callback(&gpio_irq_handler);
+    irq_set_enabled(IO_IRQ_BANK0, true);
 
     stdio_init_all();
     sleep_ms(2000);
@@ -276,9 +340,14 @@ int main()
     gpio_init(Bomba);
     gpio_set_dir(Bomba, GPIO_OUT);
 
-    gpio_init(LED_PIN);
-    gpio_set_dir(LED_PIN, GPIO_OUT);
-    gpio_put(LED_PIN, false);
+    gpio_init(LED_BOMBA_LIGADA);
+    gpio_set_dir(LED_BOMBA_LIGADA, GPIO_OUT);
+    gpio_put(LED_BOMBA_LIGADA, false);
+
+    gpio_init(LED_BOMBA_DESLIGADA);
+    gpio_set_dir(LED_BOMBA_DESLIGADA, GPIO_OUT);
+    gpio_put(LED_BOMBA_DESLIGADA, false);
+
     gpio_init(BOTAO_A);
     gpio_set_dir(BOTAO_A, GPIO_IN);
     gpio_pull_up(BOTAO_A);
@@ -330,6 +399,7 @@ int main()
     char str_x[5]; // Buffer para armazenar a string
     char str_y[5]; // Buffer para armazenar a string
     bool cor = true;
+
     while (true)
     {
         cyw43_arch_poll();
@@ -359,9 +429,8 @@ int main()
         ssd1306_rect(&ssd, 52, 102, 8, 8, cor, !gpio_get(BOTAO_A)); // Desenha um retângulo
         ssd1306_rect(&ssd, 52, 114, 8, 8, cor, !cor);               // Desenha um retângulo
         ssd1306_send_data(&ssd);                                    // Atualiza o display
-        sleep_ms(300);
         LigDes_bomba();
-        printf("Limite minimo %d limite máximo %d \n", limite_min, limite_max);
+        printf("Calibracao minima %d calibracao máxima %d \n", calibracao_minima, calibracao_maxima);
         sleep_ms(1000);
     }
 
