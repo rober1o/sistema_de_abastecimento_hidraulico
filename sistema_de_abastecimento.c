@@ -9,50 +9,50 @@
 #include <stdlib.h>
 #include "ssd1306.h"
 #include "font.h"
-
 #define LED_PIN 12
 #define BOTAO_A 5
-#define BOTAO_JOY 22
-#define JOYSTICK_X 26
-#define JOYSTICK_Y 27
-#define Bomba 13//simula bomba
-uint16_t Min_G =20;//guarda nivel min globalmente
-uint16_t Max_G =80;//guarda nivel max globalmente
-void LigDes_bomba(){
+#define PIN_BOMBA 28
+#define Bomba 8 // simula bomba
+// Variáveis globais para armazenar min e max
+int limite_min = 20;
+int limite_max = 80;
+void LigDes_bomba()
+{
     //------Início Tratamento para simular boia com JOY--------------
-        adc_select_input(0);
-        uint16_t x = adc_read();
-        if(x<400){
-            x=400;
-        }else if(x>2050){
-            x=2050;
-        }
-        uint16_t nivel=((x-400)/1650.00)*100; //normalziando
-        printf("nivel %d\n", nivel);
-        //------Fim Tratamento para simular boia com JOY-----------------
+    adc_select_input(2);
+    uint16_t x = adc_read();
+    if (x < 400)
+    {
+        x = 400;
+    }
+    else if (x > 2050)
+    {
+        x = 2050;
+    }
+    uint16_t nivel = ((x - 400) / 1650.00) * -100+100; // normalziando
+    printf("nivel %d\n", nivel);
+    //------Fim Tratamento para simular boia com JOY-----------------
 
-        //---------Inicio Func Liga/desliga Bomba------------------------
-         
-        if(nivel<=Min_G){
-            gpio_put(Bomba,1);//simula acionamento da bomba
-        }
-        if(nivel>=Max_G){
-            gpio_put(Bomba,0);//simula desligamento da bomba
-        }
-        //---------Fim Func Liga/desliga Bomba------------------------
+    //---------Inicio Func Liga/desliga Bomba------------------------
+
+    if (nivel <= limite_min)
+    {
+        gpio_put(Bomba, 1); // simula acionamento da bomba
+    }
+    if (nivel >= limite_max)
+    {
+        gpio_put(Bomba, 0); // simula desligamento da bomba
+    }
+    //---------Fim Func Liga/desliga Bomba------------------------
 }
 
-#define WIFI_SSID "NomeDaRede"
-#define WIFI_PASS "Senha_Do_Wifi"
+#define WIFI_SSID "GIPAR"
+#define WIFI_PASS "usergipar"
 
 #define I2C_PORT_DISP i2c1
 #define I2C_SDA_DISP 14
 #define I2C_SCL_DISP 15
 #define endereco 0x3C
-
-// Variáveis globais para armazenar min e max
-int limite_min = 0;
-int limite_max = 4095;
 
 const char HTML_BODY[] =
     "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Abastecimento</title><style>"
@@ -73,7 +73,7 @@ const char HTML_BODY[] =
     "document.getElementById('min').innerText=d.min;"
     "document.getElementById('max').innerText=d.max;"
     "document.getElementById('nivel').innerText=d.x;"
-    "document.getElementById('fill').style.width=(d.x/4095*100)+'%';});}"
+    "document.getElementById('fill').style.width=d.x+'%';});}"
     "function enviar(){let minv=parseInt(min_in.value),maxv=parseInt(max_in.value);"
     "if(isNaN(minv)||isNaN(maxv)||minv<0||maxv>100||minv>maxv){fb('Os valores devem estar entre 0 e 100, sendo que o valor mínimo não pode ser maior que o valor máximo','error');return;}"
     "fetch('/limites/min/'+minv+'/max/'+maxv).then(r=>r.text()).then(t=>fb(t,'ok'));"
@@ -141,22 +141,24 @@ static err_t http_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t er
         int min = 0, max = 0;
         if (sscanf(req, "GET /limites/min/%d/max/%d", &min, &max) == 2)
         {
-        //------Inicio Calculo diferença minima de 20% entre min e max----------
-        //min so pode ficar entre 20 e 80
-        if(min<20){
-            min=20;
-        }else if(min>80){
-            min=80;
-        }
-        //calcula diferença mínima de 20 entre mix e max
-        if((max-min)<20){
-            if(min<=80 && min>=20){
-                max=min+20;
-            }   
-        }
-            Max_G= max;//guarda globalmente
-            Min_G= min;//guarda globalmente
-        //------Fim Calculo diferença minima de 20% entre min e max----------
+            //------Inicio Calculo diferença minima de 20% entre min e max----------
+            // min so pode ficar entre 20 e 80
+            if (min < 20)
+            {
+                min = 20;
+            }
+            else if (min > 80)
+            {
+                min = 80;
+            }
+            // calcula diferença mínima de 20 entre mix e max
+            if ((max - min) < 20)
+            {
+                if (min <= 80 && min >= 20)
+                {
+                    max = min + 20;
+                }
+            }
             limite_min = min;
             limite_max = max;
 
@@ -188,8 +190,11 @@ static err_t http_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t er
     // Rota: /estado (usada pelo JS para atualizar a barra)
     else if (strstr(req, "GET /estado"))
     {
-        adc_select_input(0);
-        uint16_t x = adc_read();         
+        adc_select_input(2);
+        uint16_t x_raw = adc_read();
+        uint8_t x = (x_raw <= 400) ? 100 : (x_raw >= 2050) ? 0
+                                                           : (uint8_t)(((2050 - x_raw) * 100) / (2050 - 400));
+
         char json_payload[96]; // Aumentado o tamanho do buffer para caber min e max
         int json_len = snprintf(json_payload, sizeof(json_payload),
                                 "{\"bomba\":%d,\"x\":%d,\"min\":%d,\"max\":%d}\r\n",
@@ -273,18 +278,13 @@ int main()
 
     gpio_init(LED_PIN);
     gpio_set_dir(LED_PIN, GPIO_OUT);
-    gpio_put(LED_PIN, true);
+    gpio_put(LED_PIN, false);
     gpio_init(BOTAO_A);
     gpio_set_dir(BOTAO_A, GPIO_IN);
     gpio_pull_up(BOTAO_A);
 
-    gpio_init(BOTAO_JOY);
-    gpio_set_dir(BOTAO_JOY, GPIO_IN);
-    gpio_pull_up(BOTAO_JOY);
-
     adc_init();
-    adc_gpio_init(JOYSTICK_X);
-    adc_gpio_init(JOYSTICK_Y);
+    adc_gpio_init(PIN_BOMBA);
 
     i2c_init(I2C_PORT_DISP, 400 * 1000);
     gpio_set_function(I2C_SDA_DISP, GPIO_FUNC_I2C);
@@ -335,9 +335,9 @@ int main()
         cyw43_arch_poll();
 
         // Leitura dos valores analógicos
-        adc_select_input(0);
+        adc_select_input(2);
         uint16_t adc_value_x = adc_read();
-        adc_select_input(1);
+        adc_select_input(2);
         uint16_t adc_value_y = adc_read();
 
         sprintf(str_x, "%d", adc_value_x);            // Converte o inteiro em string
@@ -350,17 +350,19 @@ int main()
         ssd1306_draw_string(&ssd, "CEPEDI   TIC37", 8, 6); // Desenha uma string
         ssd1306_draw_string(&ssd, "EMBARCATECH", 20, 16);  // Desenha uma string
         ssd1306_draw_string(&ssd, ip_str, 10, 28);
-        ssd1306_draw_string(&ssd, "X    Y    PB", 20, 41);           // Desenha uma string
-        ssd1306_line(&ssd, 44, 37, 44, 60, cor);                     // Desenha uma linha vertical
-        ssd1306_draw_string(&ssd, str_x, 8, 52);                     // Desenha uma string
-        ssd1306_line(&ssd, 84, 37, 84, 60, cor);                     // Desenha uma linha vertical
-        ssd1306_draw_string(&ssd, str_y, 49, 52);                    // Desenha uma string
-        ssd1306_rect(&ssd, 52, 90, 8, 8, cor, !gpio_get(BOTAO_JOY)); // Desenha um retângulo
-        ssd1306_rect(&ssd, 52, 102, 8, 8, cor, !gpio_get(BOTAO_A));  // Desenha um retângulo
-        ssd1306_rect(&ssd, 52, 114, 8, 8, cor, !cor);                // Desenha um retângulo
-        ssd1306_send_data(&ssd);                                     // Atualiza o display
+        ssd1306_draw_string(&ssd, "X    Y    PB", 20, 41);          // Desenha uma string
+        ssd1306_line(&ssd, 44, 37, 44, 60, cor);                    // Desenha uma linha vertical
+        ssd1306_draw_string(&ssd, str_x, 8, 52);                    // Desenha uma string
+        ssd1306_line(&ssd, 84, 37, 84, 60, cor);                    // Desenha uma linha vertical
+        ssd1306_draw_string(&ssd, str_y, 49, 52);                   // Desenha uma string
+        ssd1306_rect(&ssd, 52, 90, 8, 8, cor, !false);              // Desenha um retângulo
+        ssd1306_rect(&ssd, 52, 102, 8, 8, cor, !gpio_get(BOTAO_A)); // Desenha um retângulo
+        ssd1306_rect(&ssd, 52, 114, 8, 8, cor, !cor);               // Desenha um retângulo
+        ssd1306_send_data(&ssd);                                    // Atualiza o display
         sleep_ms(300);
         LigDes_bomba();
+        printf("Limite minimo %d limite máximo %d \n", limite_min, limite_max);
+        sleep_ms(1000);
     }
 
     cyw43_arch_deinit();
