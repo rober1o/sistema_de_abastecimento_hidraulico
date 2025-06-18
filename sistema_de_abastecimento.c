@@ -1,3 +1,7 @@
+// PROJETO DE SISTEMA DE ABASTECIMENTO INTELIGENTE COM INTERFACE INTERATIVA
+// PRODUZIDO POR: HEITOR, LUIZ FELIPE, PAULO CÉSAR E ROBERTO CARDOSO
+
+// INCLUSÃO DAS BIBLIOTECAS NECESSÁRIAS
 #include "pico/cyw43_arch.h"
 #include "pico/stdlib.h"
 #include "lwip/tcp.h"
@@ -5,24 +9,33 @@
 #include "hardware/adc.h"
 #include "hardware/gpio.h"
 #include "hardware/pwm.h"
+#include "pico/bootrom.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include "ssd1306.h"
 #include "font.h"
-#define LED_PIN 12
+
+#define WIFI_SSID "GIPAR"     //  ADICIONE AQUI A SUA REDE
+#define WIFI_PASS "usergipar" // ADICIONE AQUI A SUA SENHA
+
+// DEFINIÇÃO DOS PERIFERICOS UTILIZADOS
+
 #define BOTAO_A 5
 #define BOTAO_B 6
 #define BOTAO_C 22
-#define PIN_BOMBA 28
-#define Bomba 8 // simula bomba
-#define LED_BOMBA_LIGADA 16
-#define LED_BOMBA_DESLIGADA 17
-#define BUZZER_PIN 10
-
-// Variaveis PWM
+#define PIN_BOIA 28            // PINO PARA MANUSEAR A BOIA DA BOMBA
+#define Bomba 8                // PINO PARA LIGAR O RELÉ CONECTADO A BOMBA
+#define LED_BOMBA_LIGADA 16    // LED EXTERNO -- VERDE
+#define LED_BOMBA_DESLIGADA 17 // LED EXTERNO -- VERMELHO
+#define BUZZER_PIN 10          // BUZZER
 #define PWM_WRAP 255
+#define I2C_PORT_DISP i2c1
+#define I2C_SDA_DISP 14
+#define I2C_SCL_DISP 15
+#define endereco 0x3C
 
+// VARIAVEIS GLOBAIS
 // Tempo mínimo entre acionamentos (200 ms)
 const uint64_t DEBOUNCE_TIME_US = 200000;
 
@@ -33,33 +46,35 @@ bool som_alto_tocado = false;
 const uint64_t intervalo_som_us = 5000000; // 5 segundos em microssegundos
 
 // Últimos tempos de acionamento de cada botão
-uint64_t ultimo_tempo_a = 0;
-uint64_t ultimo_tempo_b = 0;
-uint64_t ultimo_tempo_c = 0;
-int calibracao_minima = 400;
-int calibracao_maxima = 2050;
-// Variáveis globais para armazenar min e max
+uint64_t ultimo_tempo_a = 0;  // DEBOUCE BOTÃO A
+uint64_t ultimo_tempo_b = 0;  // DEBOUCE BOTÃO B
+uint64_t ultimo_tempo_c = 0;  // DEBOUCE BOTÃO C
+int calibracao_minima = 400;  // VARIAVEL PARA CALIBRAR A BOIA
+int calibracao_maxima = 2050; // VARIAVEL PARA CALIBRAR A BOIA
+
+// VARIAVEIS PARA DEFINIR LIMITE MAXIMO E MINIMO DE AGUA
 int limite_min = 20;
 int limite_max = 80;
 
+// DECLARAÇÃO DOS PROTOTIPOS DAS FUNÇÕES
 void tocar_nivel_alto();
 void tocar_nivel_baixo();
 void tocar_start();
+void LigDes_bomba();
 
-void LigDes_bomba()
+void LigDes_bomba() // FUNÇÃO RESPONSÁVEL PARA MONITORAR CONSTANTIMENTE SE DEVE OU NÃO LIGAR A BOMBA ALÉM DE EMITIR ALERTAS
 {
-
+    // LER O VALOR DA BOIA E COLOCA EM UMA ESCALA DE  A 0 A 100
     adc_select_input(2);
     uint16_t x = adc_read();
     uint16_t nivel = (uint16_t)((1.0f - ((float)(x - calibracao_minima) / (calibracao_maxima - calibracao_minima))) * 100.0f);
     printf("nivel %d\n", nivel);
 
-    // Controle da bomba e sons com lógica de estado
-    if (nivel <= limite_min)
+    if (nivel <= limite_min) // LIGA A BOMBA SE O NÍVEL DE AGUA ATINGIR O VALOR MÍNIMO
     {
-        gpio_put(Bomba, 1); // Liga bomba
+        gpio_put(Bomba, 1);
 
-        // Toca apenas se ainda não tiver tocado para este evento
+        // TOCA O BUZZER CASO NÃO TENHA TOCADO ANTES
         if (!som_baixo_tocado)
         {
             tocar_nivel_baixo();
@@ -67,11 +82,11 @@ void LigDes_bomba()
             som_alto_tocado = false; // Reseta o estado do som alto
         }
     }
-    else if (nivel >= limite_max)
+    else if (nivel >= limite_max) // DESLIGA A BOMBA CASO ATINGA O VALOR MÁXIMO
     {
         gpio_put(Bomba, 0); // Desliga bomba
 
-        // Toca apenas se ainda não tiver tocado para este evento
+        // TOCA APENAS SE NÃO TIVER TOCADO PARA ESSE EVENTO
         if (!som_alto_tocado)
         {
             tocar_nivel_alto();
@@ -85,13 +100,13 @@ void LigDes_bomba()
         som_baixo_tocado = false;
         som_alto_tocado = false;
     }
-
+    // CASO A BOMBA ESTEJA LIGADA, LIGARÁ O LED VERDE
     if (gpio_get(Bomba))
     {
         gpio_put(LED_BOMBA_DESLIGADA, false);
         gpio_put(LED_BOMBA_LIGADA, true);
     }
-    else
+    else // CASO CONTRÁRIO LIGARÁ O LED VERMELHO
     {
         gpio_put(LED_BOMBA_LIGADA, false);
         gpio_put(LED_BOMBA_DESLIGADA, true);
@@ -150,14 +165,7 @@ void tocar_nivel_baixo()
     play_tone_non_blocking(BUZZER_PIN, 440, 1000); // Dó por 5 segundos
 }
 
-#define WIFI_SSID "GIPAR"
-#define WIFI_PASS "usergipar"
-
-#define I2C_PORT_DISP i2c1
-#define I2C_SDA_DISP 14
-#define I2C_SCL_DISP 15
-#define endereco 0x3C
-
+// CORPO DA INTERFACE WEB USANDO AJAX (API FECH)
 const char HTML_BODY[] =
     "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Sistema de bastecimento</title><style>"
     "body{font-family:sans-serif;background:#f0f0f0;text-align:center;padding:20px;}"
@@ -243,7 +251,7 @@ static err_t http_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t er
     if (strstr(req, "GET /limites/min/") && strstr(req, "/max/"))
     {
         int min = 0, max = 0;
-        if (sscanf(req, "GET /limites/min/%d/max/%d", &min, &max) == 2)
+        if (sscanf(req, "GET /limites/min/%d/max/%d", &min, &max) == 2) // VERIFICA SE O USUARIO PASSU PARAMETROS VÁLIDOS
         {
             //------Inicio Calculo diferença minima de 20% entre min e max----------
             // min so pode ficar entre 20 e 80
@@ -263,12 +271,13 @@ static err_t http_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t er
                     max = min + 20;
                 }
             }
+
             limite_min = min;
             limite_max = max;
 
             printf("[DEBUG] Novo limite: min=%d, max=%d\n", limite_min, limite_max);
 
-            const char *txt = "Limites atualizados";
+            const char *txt = "Limites atualizados"; // CASO PASSOU RETORNARÁ PARA O USUÁRIO A MENSAGEM DE LIITES ATUALIZADOS
             hs->len = snprintf(hs->response, sizeof(hs->response),
                                "HTTP/1.1 200 OK\r\n"
                                "Content-Type: text/plain\r\n"
@@ -280,7 +289,7 @@ static err_t http_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t er
         }
         else
         {
-            const char *txt = "Erro nos parâmetros";
+            const char *txt = "Erro nos parâmetros"; // CASO CONTRÁRIO RETORNARÁ INFORMANDO ERROS NOS PARAMETROS
             hs->len = snprintf(hs->response, sizeof(hs->response),
                                "HTTP/1.1 400 Bad Request\r\n"
                                "Content-Type: text/plain\r\n"
@@ -291,7 +300,7 @@ static err_t http_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t er
                                (int)strlen(txt), txt);
         }
     }
-    // Rota: /estado (usada pelo JS para atualizar a barra)
+    // ROTA PARA ATUALIZAR OS VALORES E ESTADOS DA BOMBA, MINIMO E MÁXIMO E NÍVEL DE ÁGUA
     else if (strstr(req, "GET /estado"))
     {
         adc_select_input(2);
@@ -299,10 +308,10 @@ static err_t http_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t er
         uint8_t x = (x_raw <= calibracao_minima) ? 100 : (x_raw >= calibracao_maxima) ? 0
                                                                                       : (uint8_t)(((calibracao_maxima - x_raw) * 100) / (calibracao_maxima - calibracao_minima));
 
-        char json_payload[96]; // Aumentado o tamanho do buffer para caber min e max
+        char json_payload[96];
         int json_len = snprintf(json_payload, sizeof(json_payload),
                                 "{\"bomba\":%d,\"x\":%d,\"min\":%d,\"max\":%d}\r\n",
-                                gpio_get(Bomba), x, limite_min, limite_max); // <- ordem corrigida
+                                gpio_get(Bomba), x, limite_min, limite_max);
 
         hs->len = snprintf(hs->response, sizeof(hs->response),
                            "HTTP/1.1 200 OK\r\n"
@@ -360,15 +369,14 @@ static void start_http_server(void)
     printf("Servidor HTTP rodando na porta 80...\n");
 }
 
-#include "pico/bootrom.h"
-#define BOTAO_B 6
+// CALLBACK PARA TRATAMENTO DE BOTÕES
 void gpio_irq_handler(uint gpio, uint32_t events)
 {
     if (events & GPIO_IRQ_EDGE_FALL)
     {
         uint64_t agora = time_us_64();
 
-        if (gpio == BOTAO_A)
+        if (gpio == BOTAO_A) // CALIBRA O VALOR MINIMO QUANDO A BOIA ESTIVER NA CAIXA VAZIA
         {
             if (agora - ultimo_tempo_a > DEBOUNCE_TIME_US)
             {
@@ -377,7 +385,7 @@ void gpio_irq_handler(uint gpio, uint32_t events)
                 calibracao_minima = adc_read();
             }
         }
-        else if (gpio == BOTAO_B)
+        else if (gpio == BOTAO_B) // CALIBRA O VALOR MÁXIMO QUANDO A BOIA ESTIVER CNA CAIXA CHEIA
         {
             if (agora - ultimo_tempo_b > DEBOUNCE_TIME_US)
             {
@@ -386,7 +394,7 @@ void gpio_irq_handler(uint gpio, uint32_t events)
                 calibracao_maxima = adc_read();
             }
         }
-        else if (gpio == BOTAO_C)
+        else if (gpio == BOTAO_C) // BOTÃO DE BOOTSELL
         {
             if (agora - ultimo_tempo_c > DEBOUNCE_TIME_US)
             {
@@ -424,7 +432,7 @@ int main()
 
     stdio_init_all();
     sleep_ms(2000);
-
+    // INICIALIZA O PINO DA BOMBA E DOS LEDS
     gpio_init(Bomba);
     gpio_set_dir(Bomba, GPIO_OUT);
 
@@ -436,12 +444,9 @@ int main()
     gpio_set_dir(LED_BOMBA_DESLIGADA, GPIO_OUT);
     gpio_put(LED_BOMBA_DESLIGADA, false);
 
-    gpio_init(BOTAO_A);
-    gpio_set_dir(BOTAO_A, GPIO_IN);
-    gpio_pull_up(BOTAO_A);
-
+    // INICIALIZA O ADC NA BOIA
     adc_init();
-    adc_gpio_init(PIN_BOMBA);
+    adc_gpio_init(PIN_BOIA);
 
     i2c_init(I2C_PORT_DISP, 400 * 1000);
     gpio_set_function(I2C_SDA_DISP, GPIO_FUNC_I2C);
@@ -514,7 +519,7 @@ int main()
         char str_nivel[20];
         char str_limites[30];
         char str_estado[20];
-
+        //IMPRIME NO DISPLAY INFORMAÇÕES PERTINENTES
         snprintf(str_ip, sizeof(str_ip), "%s", ip_str);
         snprintf(str_nivel, sizeof(str_nivel), "Nivel:%u%%", nivel_de_agua);
         snprintf(str_limites, sizeof(str_limites), "Min:%u Max:%u", limite_min, limite_max);
@@ -525,21 +530,20 @@ int main()
         ssd1306_rect(&ssd, 3, 3, 122, 60, cor, !cor); // Borda externa
 
         // Texto
-        ssd1306_draw_string(&ssd, str_ip, 6, 6); // Linha 1
+        ssd1306_draw_string(&ssd, str_ip, 6, 6); // Linha 
         ssd1306_line(&ssd, 4, 16, 124, 16, cor); // Separador
 
-        ssd1306_draw_string(&ssd, str_nivel, 6, 18); // Linha 2
+        ssd1306_draw_string(&ssd, str_nivel, 6, 18); // Linha 
         ssd1306_line(&ssd, 4, 28, 124, 28, cor);     // Separador
 
-        ssd1306_draw_string(&ssd, str_limites, 6, 30); // Linha 3
+        ssd1306_draw_string(&ssd, str_limites, 6, 30); // Linha 
         ssd1306_line(&ssd, 4, 40, 124, 40, cor);       // Separador
 
-        ssd1306_draw_string(&ssd, str_estado, 6, 42); // Linha 4
-        ssd1306_line(&ssd, 4, 52, 124, 52, cor);      // Separador final (opcional)
+        ssd1306_draw_string(&ssd, str_estado, 6, 42); // Linha 
+        ssd1306_line(&ssd, 4, 52, 124, 52, cor);      // Separador final 
 
         ssd1306_send_data(&ssd); // Atualiza display
-
-        printf("Calibracao minima %d calibracao máxima %d \n", calibracao_minima, calibracao_maxima);
+        //CHAMA CONSTANTIMENTE A FUNÇÃO PARA MONITORAR NIVEL DE AGUA LIGANDO BOMBA E ALERTAS
         LigDes_bomba();
         sleep_ms(1000);
     }
